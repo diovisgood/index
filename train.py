@@ -7,10 +7,12 @@ import pandas as pd
 import arrow
 import argparse
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
 import data
 
 Config = None
@@ -23,7 +25,9 @@ Params = dict(
     batch_size=256,
     learning_rate=0.000003,
     weight_decay=300,
+    early_stop=0.3
 )
+
 
 def main():
     # Parse command line arguments
@@ -44,35 +48,41 @@ def main():
         help='Learning rate, float (0...1)')
     parser.add_argument('-weight-decay', type=float, default=Params['weight_decay'],
         help='Weight decay, float [0...1)')
+    parser.add_argument('-early-stop', type=float, default=Params['early_stop'],
+        help='Early stopping threshold, float (0...1)')
     parser.add_argument('-log-interval', type=int, default=5,
         help='Print log interval in seconds, int, default: 5')
     parser.add_argument('-autosave-interval', type=int, default=60,
         help='Autosave interval in seconds, int, default: 60')
     args = parser.parse_args()
     preprocess = args.preprocess
-    scaler = 'MaxAbsScaler' if (preprocess == 'diff') or (preprocess == 'logret') else 'MinMaxScaler'
     target_offset = args.target_offset
     sequence_size = args.sequence_size
     batch_size = args.batch_size
     learning_rate = args.learning_rate
     weight_decay = args.weight_decay
+    early_stop = args.early_stop
     
+    # Setup appropriate scaler depending on preprocess argument
+    scaler = StandardScaler(with_mean=False, with_std=True) if (preprocess == 'diff') or (preprocess == 'logret')\
+        else MinMaxScaler()
+
     # Setup torch
     th.set_num_threads(2)
     th.set_default_dtype(th.float32)
     th.set_default_tensor_type(th.FloatTensor)
     
     # Load configuration
+    global Config
     Config = __import__(args.config, globals(), locals())
-    assert hasattr(Config, 'Database_File')
+    assert hasattr(Config, 'Dataset_File')
     assert hasattr(Config, 'Input_Size')
-    data.Config = Config
     
     # Initialize model
     print('Initializing model')
     _module = __import__('models.' + args.model, globals(), locals(), fromlist=['Model'], level=0)
-    Model = _module.Model
-    model = Model(input_size=Config.Input_Size, output_size=1, hidden_size=1024)
+    model_class = _module.Model
+    model = model_class(input_size=Config.Input_Size, output_size=1, hidden_size=1024)
     
     # Construct file names
     name = '{}_tar{}_{}_hid{}_lr{}_wd{}_bs{}_dr{}_nz{}{}{}'.format(args.model, target_offset, preprocess,
@@ -108,30 +118,28 @@ def main():
         sequence_size = None
         
     # Load dataset
-    print('Loading database from {}'.format(Config.Database_File))
-    dataset = data.loadDataset()
+    print('Loading dataset from {}'.format(Config.Database_File))
+    dataset = data.loadDataset(Config.Database_File)
     print(dataset.head(10))
     
     # Preprocess dataset
-    print('Preprocessing dataset, method={}'.format(preprocess))
-    data.preprocessDataset(dataset, target_offset=target_offset, method=preprocess)
+    print('Preprocessing dataset, method={}, target_offset={}'.format(preprocess, target_offset))
+    data.preprocessDataset(dataset, method=preprocess, target_offset=target_offset)
     print(dataset.head(10))
     
-    # Save min, max of target values
+    # Save min, max of target values to denormalize NN output back to prices
     target = dataset.iloc[:, -1]
-    target_min, target_max = target.min(), target.max()
+    target_min, target_max, target_std = target.min(), target.max(), target.std()
     del target
-    print('Target min={} max={}'.format(target_min, target_max))
+    print('Target min={} max={} std={}'.format(target_min, target_max, target_std))
     
-    print('Splitting database into train and test')
+    print('Splitting dataset into train and test')
     train, test = data.splitDataset(dataset, train_test_ratio=0.8)
 
-    print('Normalizing train dataset...')
+    print('Normalizing train and test datasets using method={}'.format(str(scaler)))
     data.normalizeDataset(train, method=scaler)
-
-    print('Normalizing test dataset...')
     data.normalizeDataset(test, method=scaler)
-
+    
     train_size, test_size = len(train), len(test)
     print(' Train: total {} records'.format(train_size))
     print(train.head(10))
@@ -162,7 +170,6 @@ def main():
     # Initialize optimizer
     criterion = nn.MSELoss(reduction='mean')
     optimizer = Adam(model.parameters(), lr=learning_rate)
-    #scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=2)
     
     # These variables are used to draw price and prediction charts for train and test datasets
     last_test_y, last_test_yhat = None, None
@@ -194,7 +201,6 @@ def main():
             # Calculate loss
             loss = criterion(yhat, y)
             loss = loss.sum()
-            #loss = calculateLoss(yhat, y)
             
             # Update mean train error
             train_loss = (train_loss * (1 - momentum) + loss.item() * momentum) \
@@ -204,7 +210,7 @@ def main():
             optimizer.zero_grad()
             # Calculate parameters gradient
             loss.backward()
-            # Do weight decay
+            # Do weight decay. I don't use Adam's internal weight decay as it is implemented incorrectly.
             weightDecay(optimizer.param_groups, weight_decay)
             # Update model weights
             optimizer.step()
@@ -214,6 +220,8 @@ def main():
             # Sometimes perform validation test
             if (niter % test_interval == 0):
                 test_loss, last_test_y, last_test_yhat = validate(test, model, criterion)
+                last_test_y = denormalize(last_test_y, target_min, target_max, target_std, preprocess)
+                last_test_yhat = denormalize(last_test_yhat, target_min, target_max, target_std, preprocess)
                 # Update best results if needed
                 if (min_test_loss is None) or (min_test_loss > test_loss):
                     min_test_loss = test_loss
@@ -221,10 +229,10 @@ def main():
                     best_state_is_not_saved = True
                     stat.loc[len(stat)] = [niter, epoch, train_loss, test_loss, min_test_loss]
                 # Check for early-stopping
-                if (test_loss - min_test_loss >= 0.3 * min_test_loss):
+                if (test_loss - min_test_loss >= early_stop * min_test_loss):
                     print('Early stopping')
                     break
-
+                    
             # Print out some log with log_interval
             if (arrow.now().timestamp - last_log_time.timestamp >= args.log_interval):
                 print(' niter={} epoch={} train_loss={} test_loss={} min_test_loss={}'.format(
@@ -244,22 +252,22 @@ def main():
                 savePlot(plot_file_name, df=stat[['train_loss', 'test_loss']], title=args.model)
                 # Validate model on train subset
                 _, last_train_y, last_train_yhat = validate(train.head(len(test)), model, criterion)
+                last_train_y = denormalize(last_train_y, target_min, target_max, target_std, preprocess)
+                last_train_yhat = denormalize(last_train_yhat, target_min, target_max, target_std, preprocess)
                 # Draw charts with real and predicted data
-                saveChart(train_chart_file_name, last_train_y, last_train_yhat, target_min, target_max, preprocess)
-                saveChart(test_chart_file_name, last_test_y, last_test_yhat, target_min, target_max, preprocess)
+                saveChart(train_chart_file_name, last_train_y, last_train_yhat)
+                saveChart(test_chart_file_name, last_test_y, last_test_yhat)
                 last_save_time = arrow.now()
             
             # Increment iteration counter
             niter += 1
 
         # Check for early-stopping
-        if (min_test_loss is not None) and (test_loss - min_test_loss >= 0.2 * min_test_loss):
+        if (min_test_loss is not None) and (test_loss - min_test_loss >= early_stop * min_test_loss):
             break
 
         # Increment epoch counter
         epoch += 1
-
-        #scheduler.step(test_loss)
 
     # Load best model state
     model.load_state_dict(best_state_dict, strict=True)
@@ -335,31 +343,28 @@ def savePlot(plot_file_name, df: pd.DataFrame, title: str):
         pass
 
 
-def saveChart(chart_file_name, y, yhat, target_min=0, target_max=1, preprocess=None):
+def denormalize(v, target_min, target_max, target_std, preprocess):
+    # Convert output values to prices
+    if (preprocess == 'diff'):
+        # Denormalize StandardScaler
+        v = v * target_std
+        # Convert differences to prices
+        v = v.cumsum(dim=0)
+    elif (preprocess == 'logret'):
+        # Denormalize StandardScaler
+        v = v * target_std
+        # v = v.exp()
+        # for i in range(y.size(0)):
+        #     v[i] = v[i] * (v[i - 1] if (i > 0) else 1000.0)
+        v = v.cumsum(dim=0)
+    else:
+        # Denormalize MinMaxScaler
+        v = v * (target_max - target_min) + target_min
+    return v
+
+
+def saveChart(chart_file_name, y, yhat):
     try:
-        # Convert output values to prices
-        if (preprocess == 'diff'):
-            # Denormalize MaxAbsScaler
-            y = y * max(abs(target_min), abs(target_max))
-            yhat = yhat * max(abs(target_min), abs(target_max))
-            # Convert differences to prices
-            y = y.cumsum(dim=0)
-            yhat = yhat.cumsum(dim=0)
-        elif (preprocess == 'logret'):
-            # Denormalize MaxAbsScaler
-            y = y * max(abs(target_min), abs(target_max))
-            yhat = yhat * max(abs(target_min), abs(target_max))
-            # y = y.exp()
-            # yhat = yhat.exp()
-            # for i in range(y.size(0)):
-            #     y[i] = y[i] * (y[i - 1] if (i > 0) else 1000.0)
-            #     yhat[i] = yhat[i] * (yhat[i - 1] if (i > 0) else 1000.0)
-            y = y.cumsum(dim=0)
-            yhat = yhat.cumsum(dim=0)
-        else:
-            # Denormalize MinMaxScaler
-            y = y * (target_max - target_min) + target_min
-            yhat = yhat * (target_max - target_min) + target_min
         fig = plt.figure(figsize=(8, 6), dpi=100, facecolor='w', edgecolor='k')
         ax = fig.add_subplot(1, 1, 1)
         ax.plot(y.numpy(), label='y')

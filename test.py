@@ -1,8 +1,5 @@
 import os
-import math
 import torch as th
-import numpy as np
-import pandas as pd
 import argparse
 import matplotlib
 #matplotlib.use('Agg')
@@ -19,13 +16,15 @@ Params = dict(
     batch_size=256,
     learning_rate=0.000003,
     weight_decay=300,
+    early_stop=0.3
 )
+
 
 if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Index')
     parser.add_argument('config', type=str, default='RTSI',
-                        help='Name of index subdirectory which contains configuration and data to process.')
+        help='Name of index subdirectory which contains configuration and data to process.')
     parser.add_argument('-model', type=str, default=Params['model'],
         help='Name of model to train. Choose one from models subdirectory.')
     parser.add_argument('-preprocess', type=str, default=Params['preprocess'],
@@ -44,9 +43,8 @@ if __name__ == "__main__":
 
     # Load configuration
     Config = __import__(args.config, globals(), locals())
-    assert hasattr(Config, 'Database_File')
+    assert hasattr(Config, 'Dataset_File')
     assert hasattr(Config, 'Input_Size')
-    data.Config = Config
 
     # Initialize model
     print('Initializing model')
@@ -65,33 +63,33 @@ if __name__ == "__main__":
     # Load model parameters
     state_dict = th.load(model_file_name)
     model.load_state_dict(state_dict, strict=True)
-    print(model)
+    print(model, '\n')
 
-    # Load database
-    print('Loading database from {}'.format(Config.Database_File))
-    dataset = data.loadDataset()
-    print(dataset.head(10))
+    # Load dataset
+    print('Loading dataset from {}'.format(Config.Dataset_File))
+    dataset = data.loadDataset(Config.Dataset_File)
+    print(dataset.head(10), '\n')
 
-    print('Splitting database into train and test')
-    train, test = data.splitDataset(dataset)
-    print(' Train: total {} records'.format(len(train)))
-    print(' Test: total {} records'.format(len(test)))
-
-    dataset = test
-
+    # print('Splitting dataset into train and test')
+    # train, test = data.splitDataset(dataset)
+    # print(' Train: total {} records'.format(len(train)))
+    # print(' Test: total {} records'.format(len(test)))
+    # dataset = test
+    
     # Preprocess dataset
-    print('Preprocessing dataset, method={}'.format(preprocess))
-    data.preprocessDataset(dataset, target_offset=target_offset, method=preprocess)
-    print(dataset.head(10))
+    print('Preprocessing dataset, method={}, target_offset={}'.format(preprocess, target_offset))
+    data.preprocessDataset(dataset, method=preprocess, target_offset=target_offset)
+    print(dataset.head(10), '\n')
 
     # Save min, max of target values
     target = dataset.iloc[:, -1]
-    target_min, target_max = target.min(), target.max()
+    target_min, target_max, target_std = target.min(), target.max(), target.std()
     del target
-    print('Target min={} max={}'.format(target_min, target_max))
+    print('Target min={} max={} std={}\n'.format(target_min, target_max, target_std))
 
     print('Normalizing dataset...')
     data.normalizeDataset(dataset, method=scaler)
+    print(dataset.head(10), '\n')
 
     # Read input and target
     x = dataset.iloc[:, :-1].values
@@ -120,26 +118,26 @@ if __name__ == "__main__":
     # Convert y and yhat to vector
     y = y[:, 0].detach()
     yhat = yhat[:, 0].detach()
-
+    
     # Total count of predictions made
     n = yhat.size(0)
-
+    
     # Calculate prediction error
     if (preprocess == 'diff'):
-        # Denormalize MaxAbsScaler
-        y = y * max(abs(target_min), abs(target_max))
-        yhat = yhat * max(abs(target_min), abs(target_max))
-        # Calculate
+        # Denormalize StandardScaler
+        y = y * target_std
+        yhat = yhat * target_std
+        # Calculate err
         d = y * yhat
         err = (y - yhat)
         # Convert differences to prices
         y = y.cumsum(dim=0)
         yhat = yhat.cumsum(dim=0)
     elif (preprocess == 'logret'):
-        # Denormalize MaxAbsScaler
-        y = y * max(abs(target_min), abs(target_max))
-        yhat = yhat * max(abs(target_min), abs(target_max))
-        # Calculate
+        # Denormalize StandardScaler
+        y = y * target_std
+        yhat = yhat * target_std
+        # Calculate err
         d = y * yhat
         err = (y - yhat)
         # Convert log(returns) to prices
@@ -149,11 +147,12 @@ if __name__ == "__main__":
         # Denormalize MinMaxScaler
         y = y * (target_max - target_min) + target_min
         yhat = yhat * (target_max - target_min) + target_min
-        # Calculate
+        # Calculate err
         dy = y[1:] - y[:-1]
         dyhat = yhat[1:] - yhat[:-1]
         d = dy * dyhat
         err = (dy - dyhat)
+
     # Number of times NN correctly predicted future price movement up or down
     n_pos = (d >= 0).sum()
     # Number of times NN failed to predict future price movement up or down
@@ -162,7 +161,8 @@ if __name__ == "__main__":
     err_pos = th.sqrt(th.pow(err[d >= 0], 2).mean())
     # Mean error when NN failed to predict future price movement
     err_neg = th.sqrt(th.pow(err[d < 0], 2).mean())
-
+    
+    # Print out results
     print('Number of source timesteps: {}'.format(len(dataset)))
     print('Total number of predictions: {}'.format(n))
     print('Count of correct predictions: {}'.format(n_pos))

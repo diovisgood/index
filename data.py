@@ -1,18 +1,14 @@
 import os
 import math
-from collections.abc import Iterable
-from random import randint, randrange
-import sklearn.preprocessing as preprocessing # MinMaxScaler, PowerTransformer, QuantileTransformer
-from torch.utils.data import *
+from sklearn.base import TransformerMixin
+import sklearn.preprocessing as preprocessing
 import numpy as np
 import pandas as pd
 import argparse
 
-Config = None
 
-
-def loadDataset():
-    database = pd.read_csv(Config.Database_File)
+def loadDataset(file_name):
+    database = pd.read_csv(file_name)
     database['DATETIME'] = pd.to_datetime(database['DATETIME'])
     database.set_index('DATETIME', inplace=True)
     return database
@@ -53,11 +49,16 @@ def splitDataset(dataset, train_test_ratio=0.7, interval='month'):
     return train, test
 
 
-def preprocessDataset(dataset, target_offset=1, method='diff'):
-    input_size = Config.Input_Size
-    input_columns = dataset.columns[:input_size]
-    target_columns = dataset.columns[input_size:]
-
+def preprocessDataset(dataset, target_offset=1, method='diff', target_columns=None):
+    if isinstance(target_columns, (list, tuple)):
+        input_columns = []
+        for column in dataset.columns:
+            if (column not in target_columns):
+                input_columns.append(column)
+    else:
+        input_columns = dataset.columns[:-1]
+        target_columns = dataset.columns[-1:]
+        
     if (method == 'diff'):
         # Converting absolute input price values into differences
         dataset[input_columns] = dataset[input_columns].diff(periods=1)
@@ -73,19 +74,17 @@ def preprocessDataset(dataset, target_offset=1, method='diff'):
     dataset.dropna(how='any', inplace=True)
 
 
-def normalizeDataset(dataset, method='PowerTransformer'):
+def normalizeDataset(dataset, method='StandardScaler'):
     # Scale data.
-    # Input columns contain prices - they are scaled with MinMaxScaler to diapason [0.05, 0.95)
-    # Target columns contain price differences - they are scaled with PowerTransformer to N(0; 1)
-    input_size = Config.Input_Size
-    input_columns = dataset.columns[:input_size]
-    target_columns = dataset.columns[input_size:]
-    assert hasattr(preprocessing, method)
-    scaler_class = getattr(preprocessing, method)
-    input_scaler = scaler_class()
-    target_scaler = scaler_class()
-    dataset[input_columns] = input_scaler.fit_transform(dataset[input_columns])
-    dataset[target_columns] = target_scaler.fit_transform(dataset[target_columns])
+    if isinstance(method, TransformerMixin):
+        scaler = method
+    elif isinstance(method, str):
+        assert hasattr(preprocessing, method)
+        scaler_class = getattr(preprocessing, method)
+        scaler = scaler_class()
+    else:
+        raise ValueError
+    dataset[dataset.columns] = scaler.fit_transform(dataset[dataset.columns])
 
 
 def iterateDataset(dataset, batch_size, sequence_size=None, sequences_iou=0.8, group_by='date'):
@@ -181,53 +180,52 @@ if __name__ == "__main__":
     Config = __import__(args.config)
     assert hasattr(Config, 'Source')
     assert hasattr(Config, 'Default_Timezone')
-    assert hasattr(Config, 'Input_Size')
-    assert hasattr(Config, 'Database_File')
+    assert hasattr(Config, 'Dataset_File')
 
-    database = None
-    if os.path.isfile(Config.Database_File):
-        print('Database was already created in file {}'.format(Config.Database_File))
+    dataset = None
+    if os.path.isfile(Config.Dataset_File):
+        print('Dataset was already created in file {}'.format(Config.Dataset_File))
         exit()
 
-    print('Creating database')
+    print('Creating dataset')
     if isinstance(Config.Source, list):
         for name in Config.Source:
             print('Processing {}'.format(name))
             data = _loadStock(name, tzinfo=Config.Default_Timezone)
             print(' Loaded {} rows'.format(len(data)))
-            database = pd.merge(database, data, how='outer', left_index=True, right_index=True)\
-                if (database is not None) else data
+            dataset = pd.merge(dataset, data, how='outer', left_index=True, right_index=True)\
+                if (dataset is not None) else data
     elif isinstance(Config.Source, str):
         print('Processing {}'.format(Config.Source))
-        database = pd.read_csv(Config.Source)
-        datetime = pd.to_datetime(database['DATETIME'])
-        database['DATETIME'] = datetime
-        database.set_index('DATETIME', inplace=True)
-    print(database.head(10))
+        dataset = pd.read_csv(Config.Source)
+        datetime = pd.to_datetime(dataset['DATETIME'])
+        dataset['DATETIME'] = datetime
+        dataset.set_index('DATETIME', inplace=True)
+    print(dataset.head(10))
 
     # Target price column should be the last one
     print('Dropping rows with target=NaN')
-    inputs = database.columns[:-1]
-    target = database.columns[-1]
-    database.dropna(how='any', subset=[target], inplace=True)
+    inputs = dataset.columns[:-1]
+    target = dataset.columns[-1]
+    dataset.dropna(how='any', subset=[target], inplace=True)
 
     print('Filling missing values by LOCF (last observation carried forward)')
-    for column in database.columns:
-        database[column].fillna(method='ffill', inplace=True)
+    for column in dataset.columns:
+        dataset[column].fillna(method='ffill', inplace=True)
 
     print('Dropping rows with NaN')
-    database.dropna(how='any', inplace=True)
-    print(database.head(10))
+    dataset.dropna(how='any', inplace=True)
+    print(dataset.head(10))
 
     if hasattr(Config, 'Work_Date'):
         print('Removing out of work date rows for period {}'.format(Config.Work_Date))
-        database = database.loc[Config.Work_Date[0]:Config.Work_Date[1]]
-        print(database.head(10))
+        dataset = dataset.loc[Config.Work_Date[0]:Config.Work_Date[1]]
+        print(dataset.head(10))
 
     if hasattr(Config, 'Work_Time'):
         print('Removing out of work time rows for period {}'.format(Config.Work_Time))
-        database = database.between_time(*Config.Work_Time)
-        print(database.head(10))
+        dataset = dataset.between_time(*Config.Work_Time)
+        print(dataset.head(10))
 
-    print('Saving database to file: {}'.format(Config.Database_File))
-    database.to_csv(Config.Database_File)
+    print('Saving dataset to file: {}'.format(Config.Dataset_File))
+    dataset.to_csv(Config.Dataset_File)
