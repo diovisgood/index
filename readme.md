@@ -53,7 +53,7 @@ Generally speaking you can choose to feed into neural network one of the followi
   See note below.
 - Logreturns: *Ln(Latest_Price/Price_One_Interval_Ago)*.
   These values are less likely to contain outliers than differences.
-  Again **StandardScaler(with_mean=False, with_std=True)** or even **MaxAbsScaler**.
+  Again **StandardScaler(with_mean=False, with_std=True)** or even **MaxAbsScaler**
   are appropriate to normalize them.
 
 Note: I suggest using **StandardScaler** with argument
@@ -69,7 +69,7 @@ and negative - if price fell down. I believe this is important for NN to learn s
 
 Functions to work with dataset are located in `data.py`
 
-##### Loading dataset
+### Loading dataset
 
 Loading dataset from CSV file is fairly easy when using **pandas** package:
 ```python
@@ -84,7 +84,7 @@ def loadDataset(file_name):
 Note: after reading CSV file we convert _DATETIME_ column into `dtype=datetime64` type.
 And set this column as index for _dataset_.
 
-##### Splitting dataset into train and test set
+### Splitting dataset into train and test set
 Since we are working with time-series we should be careful when splitting dataset.
 It would be wrong to randomly assing each interval sample either to train or to test datasets.
 Example of such **wrong split** looks like this: 
@@ -96,12 +96,69 @@ The best way would be to split the whole time-series into two unequal parts,
 like author of the original work did.
 
 But I prefer another approach: choose some big interval like week, month or quarter,
-and for split each big interval of source sequence into two unequal parts: train and test.
+and split each big interval of source sequence into two unequal parts: train and test.
 Result of such **correct split** would look like this:
  
 ![Correct way to split dataset](img/train_test_correct_split.png)
 
 Here each month is split into train series (blue) and test series (red).
+
+### Preprocessing data
+
+Preprocessing is implemented in function `preprocessDataset` in `data.py`.
+
+We are given the following arguments:
+- `dataset` as **pandas.DataFrame**, where target price is the last column.
+- `target_offset` - the number of periods to make prediction into the future.
+   I.e. with `target_offset=1` we train model to predict target price in 1 minute.
+
+If you choose to feed into model simply _prices_ then you need just to shift target price for `target_offset` intervals:
+```python
+    input_columns = dataset.columns[:-1]
+    target_columns = dataset.columns[-1:]
+
+    dataset[target_columns] = dataset[target_columns].shift(periods=-target_offset)
+```
+
+Computing _differences_ of prices is very easy with pandas:
+```python
+    # Converting absolute input price values into differences
+    dataset[input_columns] = dataset[input_columns].diff(periods=1)
+    # Converting absolute target price into differences with target_offset
+    dataset[target_columns] = dataset[target_columns].diff(periods=target_offset)
+    dataset[target_columns] = dataset[target_columns].shift(periods=-target_offset)
+```
+
+Computing _logreturns_ is just a little bit trickier:
+```python
+    # Converting input prices into log-returns
+    dataset[input_columns] = np.log(1 + dataset[input_columns].pct_change(periods=1))
+    # Converting target prices into log-returns
+    dataset[target_columns] = np.log(1 + dataset[target_columns].pct_change(periods=target_offset))
+    dataset[target_columns] = dataset[target_columns].shift(periods=-target_offset)
+```
+
+### Normalizing data
+
+Dataset normalization is essential to speed-up model training.
+
+You can use **sklearn.preprocessing** package to normalize **pandas.DataFrame** dataset.
+
+I initialize `scaler` in `train.py` basing on `preprocess` argument as follows:
+```python
+    from sklearn.preprocessing import StandardScaler, MinMaxScaler
+
+    # Setup appropriate scaler depending on preprocess argument
+    scaler = StandardScaler(with_mean=False, with_std=True) if (preprocess == 'diff') or (preprocess == 'logret')\
+        else MinMaxScaler()
+```
+
+This scaler is then used in `normalizeDataset` function in `data.py`:
+```python
+    dataset[dataset.columns] = scaler.fit_transform(dataset[dataset.columns])
+```
+
+That is it! Simple and quick solution, thanks to **sklearn.*** packages!
 
 ## Model
 
@@ -109,7 +166,6 @@ Model from original article had the following structure:
 
  N | Layer | Input Size | Output Size
 --- | ----- | ----- | ----
- - | Input | 500 | 
  1 | Linear | 500 | 1024
  2 | Linear | 1024 | 512
  3 | Linear | 512 | 256
@@ -118,8 +174,30 @@ Model from original article had the following structure:
 
 In this project you may find it in `modules/fc5.py`
 
+There you may find some other models that I have tried:
+- `winfc5.py` - five dense layers that work in 'windowed' mode.
+  Model takes as input 10 last intervals with all stock prices for each interval.
+  I.e. for S&P500 it receives 10x500 = 5000 numbers as input.
+- `lstm1.py` - recurrent network with one output dense layer.
+  Models takes prices for current interval and keeps
 
 ## Training
+
+In order to train a model you need first to specify parameters for `train.py` either in `Params` dictionary
+or in a command line:
+```python
+Params = dict(
+    model='fc5',
+    preprocess=None,
+    target_offset=1,
+    sequence_size=128,
+    batch_size=256,
+    learning_rate=0.000003,
+    weight_decay=300,
+    early_stop=0.3
+)
+```
+
 
 
 ## Testing
