@@ -13,6 +13,6 @@ Default_Timezone = 'Europe/Moscow'
 Work_Date = ['2018-12-01', '2019-03-31']
 Work_Time = ['10:01', '18:40']
 
-Database_File = _Base_Dir + 'database.csv.gz'
+Dataset_File = _Base_Dir + 'dataset.csv.gz'
 
 Input_Size = len(Source) - 1
