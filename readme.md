@@ -329,6 +329,7 @@ learning curves and statistics are saved to files.
 
 Typical learning curve looks like this:
 ![typical learning curve](img/typical_learning_curve.png)
+
 Note: y-axis (error) has log-scale, x-axis is number of 5-second log intervals.
 
 Upon completion script outputs final results:
@@ -453,6 +454,6 @@ I also tried to change MSE criterion to
   to make any predictions, especially at minutes intervals.
   I'm open for your examples that prove that I'm wrong )
 1. Though this project did not reveal any profitable ideas it was fun and useful.
-  When you try to works with market data it is then much easier to work with any other kind of data.
+  When work with _hard-to-analyse_ market data it is then much easier to work with any other kind of data.
 
 Thank you for getting by!
