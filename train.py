@@ -18,13 +18,13 @@ import data
 Config = None
 
 Params = dict(
-    model='winfc5',
-    preprocess='logret',
+    model='fc5',
+    preprocess=None,
     target_offset=1,
     sequence_size=128,
     batch_size=256,
     learning_rate=0.000003,
-    weight_decay=300,
+    weight_decay=30,
     early_stop=0.3
 )
 
@@ -118,8 +118,8 @@ def main():
         sequence_size = None
         
     # Load dataset
-    print('Loading dataset from {}'.format(Config.Database_File))
-    dataset = data.loadDataset(Config.Database_File)
+    print('Loading dataset from {}'.format(Config.Dataset_File))
+    dataset = data.loadDataset(Config.Dataset_File)
     print(dataset.head(10))
     
     # Preprocess dataset
@@ -129,16 +129,16 @@ def main():
     
     # Save min, max of target values to denormalize NN output back to prices
     target = dataset.iloc[:, -1]
-    target_min, target_max, target_std = target.min(), target.max(), target.std()
+    target_min, target_max, target_mean, target_std = target.min(), target.max(), target.mean(), target.std()
     del target
-    print('Target min={} max={} std={}'.format(target_min, target_max, target_std))
+    print('Target min={} max={} mean={} std={}\n'.format(target_min, target_max, target_mean, target_std))
     
     print('Splitting dataset into train and test')
-    train, test = data.splitDataset(dataset, train_test_ratio=0.8)
-
+    train, test = data.splitDataset(dataset, train_test_ratio=0.8, interval='month')
+    
     print('Normalizing train and test datasets using method={}'.format(str(scaler)))
-    data.normalizeDataset(train, method=scaler)
-    data.normalizeDataset(test, method=scaler)
+    data.normalizeDataset(train, scaler=scaler)
+    data.normalizeDataset(test, scaler=scaler)
     
     train_size, test_size = len(train), len(test)
     print(' Train: total {} records'.format(train_size))
@@ -164,7 +164,7 @@ def main():
     
     # We'll keep track of minimal test_loss and best model parameters
     min_test_loss = stat.min_test_loss.iloc[-1] if (len(stat) > 0) else None
-    best_state_dict = model.state_dict() if (min_test_loss is not None) else None
+    best_state_dict = copy.deepcopy(model.state_dict()) if (min_test_loss is not None) else None
     best_state_is_not_saved = False
 
     # Initialize optimizer
@@ -281,9 +281,15 @@ def main():
 
     # Make final validation
     test_loss, last_test_y, last_test_yhat = validate(test, model, criterion)
+    last_test_y = denormalize(last_test_y, target_min, target_max, target_std, preprocess)
+    last_test_yhat = denormalize(last_test_yhat, target_min, target_max, target_std, preprocess)
+
     train_loss, last_train_y, last_train_yhat = validate(train.head(len(test)), model, criterion)
-    saveChart(train_chart_file_name, last_train_y, last_train_yhat, target_min, target_max, preprocess)
-    saveChart(test_chart_file_name, last_test_y, last_test_yhat, target_min, target_max, preprocess)
+    last_train_y = denormalize(last_train_y, target_min, target_max, target_std, preprocess)
+    last_train_yhat = denormalize(last_train_yhat, target_min, target_max, target_std, preprocess)
+
+    saveChart(train_chart_file_name, last_train_y, last_train_yhat)
+    saveChart(test_chart_file_name, last_test_y, last_test_yhat)
     print('Final results:')
     print(' train_loss={} test_loss={} min_test_loss={}'.format(train_loss, test_loss, min_test_loss))
 

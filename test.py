@@ -1,5 +1,6 @@
 import os
 import torch as th
+import torch.nn as nn
 import argparse
 import matplotlib
 #matplotlib.use('Agg')
@@ -9,8 +10,8 @@ import data
 Config = None
 
 Params = dict(
-    model='winfc5',
-    preprocess='logret',
+    model='fc5',
+    preprocess=None,
     target_offset=1,
     sequence_size=128,
     batch_size=256,
@@ -51,12 +52,10 @@ if __name__ == "__main__":
     _module = __import__('models.' + args.model, globals(), locals(), fromlist=['Model'], level=0)
     Model = _module.Model
     model = Model(input_size=Config.Input_Size, output_size=1, hidden_size=1024)
-    model.eval()
 
     # Construct file names
     model_file_name = args.config + '/' + args.model + '.pt'
     plot_file_name = args.config + '/' + args.model + '.png'
-    stat = None
     if (not os.path.isfile(model_file_name)):
         raise FileNotFoundError(model_file_name)
 
@@ -83,12 +82,12 @@ if __name__ == "__main__":
 
     # Save min, max of target values
     target = dataset.iloc[:, -1]
-    target_min, target_max, target_std = target.min(), target.max(), target.std()
+    target_min, target_max, target_mean, target_std = target.min(), target.max(), target.mean(), target.std()
     del target
-    print('Target min={} max={} std={}\n'.format(target_min, target_max, target_std))
+    print('Target min={} max={} mean={} std={}\n'.format(target_min, target_max, target_mean, target_std))
 
     print('Normalizing dataset...')
-    data.normalizeDataset(dataset, method=scaler)
+    data.normalizeDataset(dataset, scaler=scaler)
     print(dataset.head(10), '\n')
 
     # Read input and target
@@ -109,6 +108,11 @@ if __name__ == "__main__":
     # Cut down y to be the same length as yhat as some windowed models may return a shorter sequence
     if (y.size(0) > yhat.size(0)):
         y = y[-yhat.size(0):]
+
+    # Calculate loss
+    criterion = nn.MSELoss(reduction='mean')
+    loss = criterion(yhat, y)
+    loss = loss.sum()
 
     # Remove batch dimension
     if hasattr(model, 'sequential') and model.sequential:
@@ -163,6 +167,7 @@ if __name__ == "__main__":
     err_neg = th.sqrt(th.pow(err[d < 0], 2).mean())
     
     # Print out results
+    print('Loss: {}'.format(loss.item()))
     print('Number of source timesteps: {}'.format(len(dataset)))
     print('Total number of predictions: {}'.format(n))
     print('Count of correct predictions: {}'.format(n_pos))

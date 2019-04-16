@@ -1,7 +1,6 @@
 import torch as th
 import torch.nn as nn
 import torch.nn.functional as F
-#from runnorm import RunNorm
 
 
 def leaky_tanh(input, slope=0.01):
@@ -9,7 +8,7 @@ def leaky_tanh(input, slope=0.01):
 
 
 class Model(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size=None, input_dropout=0.5, input_noise=0.1,
+    def __init__(self, input_size, output_size, hidden_size=None, input_dropout=0.02, input_noise=0.005,
                  activation=F.leaky_relu, **kwargs):
         super().__init__()
         if (hidden_size is None):
@@ -22,7 +21,6 @@ class Model(nn.Module):
         self.input_noise = input_noise
         self.activation = activation
         
-        #self.norm = RunNorm(num_features=input_size, momentum=momentum)
         self.fc1 = nn.Linear(input_size, hidden_size, bias=True)
         self.fc2 = nn.Linear(hidden_size, hidden_size // 2, bias=True)
         self.fc3 = nn.Linear(hidden_size // 2, hidden_size // 4, bias=True)

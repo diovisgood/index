@@ -1,7 +1,7 @@
 import os
 _Base_Dir = os.path.basename(os.path.dirname(__file__)) + '/'
 
-Source = [ (_Base_Dir + 'data/' + x) for x in [
+Source = [ ('moex/' + x) for x in [
     'LKOH', 'SBER', 'GAZP', 'GMKN', 'NVTK', 'ROSN', 'TATN', 'YNDX', 'MGNT', 'ALRS', 'SNGS',
     'MTSS', 'SNGSP', 'FIVE', 'CHMF', 'NLMK', 'POLY', 'IRAO', 'VTBR', 'MOEX', 'PLZL', 'SBERP',
     'USDRUB_TOD', 'Brent',

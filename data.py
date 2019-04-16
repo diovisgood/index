@@ -44,8 +44,10 @@ def splitDataset(dataset, train_test_ratio=0.7, interval='month'):
         test_subset = dataset.iloc[(interval_start_i + n_train):]
         train = pd.concat([train, train_subset]) if (train is not None) else train_subset
         test = pd.concat([test, test_subset]) if (test is not None) else test_subset
-
+        
     # Return train and test datasets
+    train = train.copy()
+    test = test.copy()
     return train, test
 
 
@@ -71,20 +73,22 @@ def preprocessDataset(dataset, target_offset=1, method='diff', target_columns=No
         # Converting target prices into log-returns
         dataset[target_columns] = np.log(1 + dataset[target_columns].pct_change(periods=target_offset))
         dataset[target_columns] = dataset[target_columns].shift(periods=-target_offset)
+    else:
+        dataset[target_columns] = dataset[target_columns].shift(periods=-target_offset)
     dataset.dropna(how='any', inplace=True)
 
 
-def normalizeDataset(dataset, method='StandardScaler'):
+def normalizeDataset(dataset, scaler='StandardScaler'):
     # Scale data.
-    if isinstance(method, TransformerMixin):
-        scaler = method
-    elif isinstance(method, str):
-        assert hasattr(preprocessing, method)
-        scaler_class = getattr(preprocessing, method)
+    if isinstance(scaler, TransformerMixin):
+        pass
+    elif isinstance(scaler, str):
+        assert hasattr(preprocessing, scaler)
+        scaler_class = getattr(preprocessing, scaler)
         scaler = scaler_class()
     else:
         raise ValueError
-    dataset[dataset.columns] = scaler.fit_transform(dataset[dataset.columns])
+    dataset.iloc[:, :] = scaler.fit_transform(dataset.to_numpy())
 
 
 def iterateDataset(dataset, batch_size, sequence_size=None, sequences_iou=0.8, group_by='date'):
@@ -178,7 +182,6 @@ if __name__ == "__main__":
     
     # Load configuration
     Config = __import__(args.config)
-    assert hasattr(Config, 'Source')
     assert hasattr(Config, 'Default_Timezone')
     assert hasattr(Config, 'Dataset_File')
 
@@ -186,6 +189,8 @@ if __name__ == "__main__":
     if os.path.isfile(Config.Dataset_File):
         print('Dataset was already created in file {}'.format(Config.Dataset_File))
         exit()
+
+    assert hasattr(Config, 'Source')
 
     print('Creating dataset')
     if isinstance(Config.Source, list):
