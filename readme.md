@@ -186,14 +186,6 @@ In this project you may find it in `modules/fc5.py`
 
 This model works with individual samples, not sequences.
 
-There you may find some other models that I have tried:
-- `winfc5.py` - five dense layers that work in 'windowed' mode.
-  Model takes as input 10 last intervals with all stock prices for each interval.
-  I.e. for S&P500 it receives 10x500 = 5000 numbers as input.
-- `lstm1.py` - recurrent network with one output dense layer.
-  Models works with sequences (nSequenceSize x nBatch x nPrices), taking prices for each step and updating hidden states. 
-- etc.
-
 Some other kinds of model are briefly described below.
 
 ### `winfc5` - Windowed Dense Model
