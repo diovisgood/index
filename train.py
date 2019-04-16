@@ -325,10 +325,13 @@ def validate(dataset, model, criterion):
     return loss.item(), y, yhat
 
 
-def calculateLoss(yhat, y):
-    dy = y[1:] - y[:-1]
-    dyhat = yhat[1:] - yhat[:-1]
-    err = (dy - dyhat)
+def calculateLoss(yhat, y, preprocess):
+    if (preprocess == 'diff') or (preprocess == 'logret'):
+        err = (y - yhat)
+    else:
+        dy = y[1:] - y[:-1]
+        dyhat = yhat[1:] - yhat[:-1]
+        err = (dy - dyhat)
     loss = th.pow(err, 2).mean()
     return loss.sum()
 

@@ -433,7 +433,20 @@ I tried different hyperparameters, different models and other indexes
 and managed to achieve at maximum: **53% accuracy**.
 That is still not enough to make profit!
 
-I also tried to change MSE criterion to 
+I also tried to change MSE criterion to accuracy function:
+```python
+def calculateLoss(yhat, y, preprocess):
+    if (preprocess == 'diff') or (preprocess == 'logret'):
+        err = (y - yhat)
+    else:
+        dy = y[1:] - y[:-1]
+        dyhat = yhat[1:] - yhat[:-1]
+        err = (dy - dyhat)
+    loss = th.pow(err, 2).mean()
+    return loss.sum()
+```
+
+But the results did not change a lot.
 
 ## Results
 
